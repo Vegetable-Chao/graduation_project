@@ -47,7 +47,7 @@ parser.add_argument('--add_layers', action='append', default=['0'], help='add la
 parser.add_argument('--cifar100', action='store_true', default=False, help='search with cifar100 dataset')
 
 parser.add_argument('--stages',type=int,default=3,help='the number of stages')
-parser.add_argument('--noarc',type=int,default=10,help='no arch optimization')
+parser.add_argument('--noarc',type=int,default=0,help='no arch optimization')
 parser.add_argument('--sample',type=int,action='append',default=[],help='the propotion of channel sample')
 parser.add_argument('--use_baidu',type=bool,default=False,help='whether to use the reduction cell of GDAS which designed by baidu')
 parser.add_argument('--use_EN',type=bool,default=True,help='whether to use batch normal in PC-DARTS')
@@ -73,104 +73,14 @@ else:
     data_folder = 'cifar-10-batches-py'
     
 
-def shengcheng(arch_nor,arch_redu,switches_normal,switches_reduce,betas_nor,betas_redu):
-    switches_nor=copy.deepcopy(switches_normal)
-    switches_redu=copy.deepcopy(switches_reduce)
-    normal_prob = F.sigmoid(arch_nor).data.cpu().numpy()
-    reduce_prob = F.sigmoid(arch_redu).data.cpu().numpy()                  
-    betas_nor_prob = betas_nor.data.cpu().numpy()
-    betas_redu_prob = betas_redu.data.cpu().numpy()
-    normal_prob = torch.from_numpy(betas_nor_prob.reshape(betas_nor_prob.shape[0],-1)*normal_prob)
-    reduce_prob = torch.from_numpy(betas_redu_prob.reshape(betas_redu_prob.shape[0],-1)*reduce_prob)
-    print("normal:",normal_prob,"reduce:",reduce_prob,"weights2nor:",betas_nor_prob,"weights2redu",betas_redu_prob,sep='\n')
-    # reduce_prob = F.softmax(arch_param[1], dim=sm_dim).data.cpu().numpy()
-    normal_final = [0 for idx in range(14)]
-    reduce_final = [0 for idx in range(14)]
-    # # remove all Zero operations*************************************************
-    for i in range(14):
-        # if switches_nor[i][0] == True:
-        #     normal_prob[i][0] = 0
-        normal_final[i] = max(normal_prob[i])  #概率值
-        # if switches_redu[i][0] == True:
-        #     reduce_prob[i][0] = 0
-        reduce_final[i] = max(reduce_prob[i]) 
-        
-
-    # Generate Architecture, similar to DARTS
-    keep_normal = [0, 1]                           #？
-    keep_reduce = [0, 1]
-    n = 3
-    start = 2
-    for i in range(3):
-        end = start + n
-        tbsn = normal_final[start:end]
-        tbsr = reduce_final[start:end]
-        edge_n = sorted(range(n), key=lambda x: tbsn[x])      
-        keep_normal.append(edge_n[-1] + start)        #边
-        keep_normal.append(edge_n[-2] + start)
-        edge_r = sorted(range(n), key=lambda x: tbsr[x])
-        keep_reduce.append(edge_r[-1] + start)
-        keep_reduce.append(edge_r[-2] + start)
-        start = end
-        n = n + 1
-    # set switches according the ranking of arch parameters
-    for i in range(14):
-        if not i in keep_normal:
-            for j in range(len(PRIMITIVES)):
-                switches_nor[i][j] = False              #上一个swichnormal是选操作，这一个是选边
-                
-        else:
-            index=torch.max(normal_prob[i],-1)[1]
-            s=-1;flag=False
-            for j in range(len(PRIMITIVES)):
-                if switches_nor[i][j]==True:
-                    s+=1
-                    if s!=index:
-                        switches_nor[i][j]=False
-    for i in range(14):
-        if not i in keep_reduce:
-            for j in range(len(PRIMITIVES)):
-                switches_redu[i][j] = False              #上一个swichnormal是选操作，这一个是选边
-                
-        else:
-            index=torch.max(reduce_prob[i],-1)[1]
-            s=-1;flag=False
-            for j in range(len(PRIMITIVES)):
-                if switches_redu[i][j]==True:
-                    s+=1
-                    if s!=index:
-                        switches_redu[i][j]=False
-            
-        
-    # translate switches into genotype
-    genotype = parse_network(switches_nor,switches_redu)
-    logging.info(genotype)
-    # ## restrict skipconnect (normal cell only)
-    # logging.info('Restricting skipconnect...')
-    # generating genotypes with different numbers of skip-connect operations
-    # for sks in range(0, 9):                                         # ???
-    #     max_sk = 8 - sks                
-    #     num_sk = check_sk_number(switches_normal)               
-    #     if not num_sk > max_sk:
-    #         continue
-    #     while num_sk > max_sk:
-    #         normal_prob = delete_min_sk_prob(switches_normal, switches_normal_2, normal_prob)
-    #         switches_normal = keep_1_on(switches_normal_2, normal_prob)
-    #         switches_normal = keep_2_branches(switches_normal, normal_prob)
-    #         num_sk = check_sk_number(switches_normal)
-    #     logging.info('Number of skip-connect: %d', max_sk)
-    #     genotype = parse_network(switches_normal)
-    #     logging.info(genotype)              
-
-
 def main():
     if not torch.cuda.is_available():
         logging.info('No GPU device available')
         sys.exit(1)
     np.random.seed(args.seed)
-    cudnn.benchmark = True                   #？？？
-    torch.manual_seed(args.seed)             #？？？
-    cudnn.enabled=True                       #？？？
+    cudnn.benchmark = True                     #找寻特定卷积算法          
+    torch.manual_seed(args.seed)            
+    cudnn.enabled=True                       
     torch.cuda.manual_seed(args.seed)
     logging.info("args = %s", args)
     #  prepare dataset
@@ -198,27 +108,25 @@ def main():
         pin_memory=True, num_workers=args.workers)                #pinmemary 锁存固定，高端设备玩主
 
     #************************************************************************************************#
-    
-    # build Network
-    # criterion = nn.CrossEntropyLoss()
+    #第二阶段：配置网络逻辑层
+    # criterion = nn.CrossEntropyLoss()       #可以选择特定的train阶段损失函数
     # criterion = criterion.cuda()
-
+    
+    #L0-1损失函数
     criterion_train = ConvSeparateLoss(weight=args.aux_loss_weight) if args.sep_loss == 'l2' else TriSeparateLoss(weight=args.aux_loss_weight)
     criterion_val = nn.CrossEntropyLoss()
     criterion_train = criterion_train.cuda()
     criterion_val = nn.CrossEntropyLoss().cuda()
-
-
-    switches = []                                                 ###值得注意
+    switches = []                              #操作淘汰标志                                             
     for i in range(14):
         switches.append([True for j in range(len(PRIMITIVES))])
-    switches_normal = copy.deepcopy(switches)                      ###copy查阅
+    switches_normal = copy.deepcopy(switches)                      
     switches_reduce = copy.deepcopy(switches)
     # To be moved to args
     num_to_keep = [5, 3, 1]
-    num_to_drop = [2,2,2]                                          #修改
+    num_to_drop = [2,2,2]                                        #操作的淘汰数
     if len(args.add_width) == args.stages:
-        add_width = args.add_width                               #？？？
+        add_width = args.add_width                               
     else:
         add_width = [[0,16],[0,8,16]][args.stages-2]                                    #add_width初始
     if len(args.add_layers) == args.stages:
@@ -228,33 +136,33 @@ def main():
     if len(args.dropout_rate) ==args.stages:
         drop_rate = args.dropout_rate
     else:
-        drop_rate = [0.0]*args.stages                               #drop初始值
+        drop_rate = [0.0]*args.stages                               #dropout逻辑
         
-    eps_no_archs = [args.noarc]*args.stages                                    #？？？        
+    eps_no_archs = [args.noarc]*args.stages                         #前n个epoch只更新逻辑参数  
 
     if len(args.sample) == args.stages:
         sample=args.sample
     else:
-        sample=[[4,8],[4,4,4]][args.stages-2]                   #通道32-64
-    epochs=[25,40,40]
+        sample=[[4,8],[4,4,4]][args.stages-2]                   
+    epochs=[25,25,25]
 
     
     
     
     #***************************************************************************************#     
-    
+    #第三阶段：训练逻辑实现层#
     
     for sp in range(len(num_to_keep)):                              
         model = Network(args.init_channels + int(add_width[sp]), CIFAR_CLASSES, args.layers + int(add_layers[sp]), criterion_val, switches_normal=switches_normal, switches_reduce=switches_reduce,
                 p=float(drop_rate[sp]),K=int(sample[sp]),use_baidu=args.use_baidu,use_EN=args.use_EN)
-        model = nn.DataParallel(model)                         #？****一定注意，多GPU并行
+        model = nn.DataParallel(model)                         #多GPU并行
         model = model.cuda()                                   
         logging.info("param size = %fMB", utils.count_parameters_in_MB(model))
         logging.info("layers=%d",args.layers + int(add_layers[sp]))
         logging.info("channels=%d",args.init_channels + int(add_width[sp]))
         logging.info("K=%d",int(sample[sp]))
         network_params = []
-        for k, v in model.named_parameters():                #？
+        for k, v in model.named_parameters():                
             if not (k.endswith('alphas_normal') or k.endswith('alphas_reduce') or k.endswith('betas_reduce')or k.endswith('betas_normal')):     #具体是啥
                 network_params.append(v)
         optimizer = torch.optim.SGD(
@@ -267,13 +175,11 @@ def main():
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, float(args.epochs), eta_min=args.learning_rate_min)
     
-    #*******************************************************************************************8
 
-
-        sm_dim = -1                                     # %%%
+        sm_dim = -1                                     
         # epochs = args.epochs
         eps_no_arch = eps_no_archs[sp]
-        scale_factor = 0.2                              # %%%
+        scale_factor = 0.2                             
         for epoch in range(epochs[sp]):
             scheduler.step()
             lr = scheduler.get_lr()[0]
@@ -566,6 +472,79 @@ def keep_2_branches(switches_in, probs):
                 switches[i][j] = False  
     return switches  
 
+def shengcheng(arch_nor,arch_redu,switches_normal,switches_reduce,betas_nor,betas_redu):     #每个epoche结束衰减出架构
+    switches_nor=copy.deepcopy(switches_normal)
+    switches_redu=copy.deepcopy(switches_reduce)
+    normal_prob = F.sigmoid(arch_nor).data.cpu().numpy()                                     ###sigmoid 激活
+    reduce_prob = F.sigmoid(arch_redu).data.cpu().numpy()                  
+    betas_nor_prob = betas_nor.data.cpu().numpy()
+    betas_redu_prob = betas_redu.data.cpu().numpy()
+    normal_prob = torch.from_numpy(betas_nor_prob.reshape(betas_nor_prob.shape[0],-1)*normal_prob)
+    reduce_prob = torch.from_numpy(betas_redu_prob.reshape(betas_redu_prob.shape[0],-1)*reduce_prob)
+    print("normal:",normal_prob,"reduce:",reduce_prob,"weights2nor:",betas_nor_prob,"weights2redu",betas_redu_prob,sep='\n')
+    # reduce_prob = F.softmax(arch_param[1], dim=sm_dim).data.cpu().numpy()
+    normal_final = [0 for idx in range(14)]
+    reduce_final = [0 for idx in range(14)]
+    # # remove all Zero operations*************************************************
+    for i in range(14):
+        # if switches_nor[i][0] == True:
+        #     normal_prob[i][0] = 0
+        normal_final[i] = max(normal_prob[i])  #概率值
+        # if switches_redu[i][0] == True:
+        #     reduce_prob[i][0] = 0
+        reduce_final[i] = max(reduce_prob[i]) 
+        
+
+    # Generate Architecture, similar to DARTS
+    keep_normal = [0, 1]                           
+    keep_reduce = [0, 1]
+    n = 3
+    start = 2
+    for i in range(3):
+        end = start + n
+        tbsn = normal_final[start:end]
+        tbsr = reduce_final[start:end]
+        edge_n = sorted(range(n), key=lambda x: tbsn[x])      
+        keep_normal.append(edge_n[-1] + start)        #边
+        keep_normal.append(edge_n[-2] + start)
+        edge_r = sorted(range(n), key=lambda x: tbsr[x])
+        keep_reduce.append(edge_r[-1] + start)
+        keep_reduce.append(edge_r[-2] + start)
+        start = end
+        n = n + 1
+    # set switches according the ranking of arch parameters
+    for i in range(14):
+        if not i in keep_normal:
+            for j in range(len(PRIMITIVES)):
+                switches_nor[i][j] = False              #上一个swichnormal是选操作，这一个是选边
+                
+        else:
+            index=torch.max(normal_prob[i],-1)[1]
+            s=-1;flag=False
+            for j in range(len(PRIMITIVES)):
+                if switches_nor[i][j]==True:
+                    s+=1
+                    if s!=index:
+                        switches_nor[i][j]=False
+    for i in range(14):
+        if not i in keep_reduce:
+            for j in range(len(PRIMITIVES)):
+                switches_redu[i][j] = False              #上一个swichnormal是选操作，这一个是选边
+                
+        else:
+            index=torch.max(reduce_prob[i],-1)[1]
+            s=-1;flag=False
+            for j in range(len(PRIMITIVES)):
+                if switches_redu[i][j]==True:
+                    s+=1
+                    if s!=index:
+                        switches_redu[i][j]=False
+            
+        
+    # translate switches into genotype
+    genotype = parse_network(switches_nor,switches_redu)
+    logging.info(genotype)
+    
 if __name__ == '__main__':
     start_time = time.time()
     main() 

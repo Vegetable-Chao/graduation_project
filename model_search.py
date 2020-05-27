@@ -9,12 +9,12 @@ from genotypes import Genotype
 
 def channel_shuffle(x, groups):                                          #0.25
     batchsize, num_channels, height, width = x.data.size()             ###x.data
-    channels_per_group = num_channels // groups                         ###应该可以整除
+    channels_per_group = num_channels // groups                         ###必须可以整除
     
     # reshape
     x = x.view(batchsize, groups, channels_per_group, height, width)
 
-    x = torch.transpose(x, 1, 2).contiguous()                       ##为何要这样做
+    x = torch.transpose(x, 1, 2).contiguous()                       ##打乱通道
 
     # flatten
     x = x.view(batchsize, -1, height, width)
@@ -32,14 +32,14 @@ class MixedOp(nn.Module):
         for i in range(len(switch)):
             if switch[i]:
                 primitive = PRIMITIVES[i]
-                op = OPS[primitive](C//self.K, stride, False)  # 改了%
+                op = OPS[primitive](C//self.K, stride, False)  
                 if 'pool' in primitive:
                     op = nn.Sequential(op, nn.BatchNorm2d(C//self.K, affine=False))
                 if isinstance(op, Identity) and p > 0:
-                    op = nn.Sequential(op, nn.Dropout(self.p))  # 卷积的drop怎样运行
+                    op = nn.Sequential(op, nn.Dropout(self.p))  # 卷积的drop
                 self.m_ops.append(op)
 
-    def update_p(self):  # 不太懂
+    def update_p(self):  
         for op in self.m_ops:
             if isinstance(op, nn.Sequential):
                 if isinstance(op[0], Identity):
@@ -50,11 +50,11 @@ class MixedOp(nn.Module):
         xtemp = x[:, :  dim_2//self.K, :, :]
         xtemp2 = x[:,  dim_2//self.K:, :, :]
         temp1 = sum(w * op(xtemp) for w, op in zip(weights, self.m_ops))
-        # reduction cell needs pooling before concat                           ###***
+        # reduction cell needs pooling before concat                          
         if temp1.shape[2] == x.shape[2]:
             ans = torch.cat([temp1, xtemp2], dim=1)
         else:
-            ans = torch.cat([temp1, self.mp(xtemp2)], dim=1)  # ？？？
+            ans = torch.cat([temp1, self.mp(xtemp2)], dim=1)  
         ans = channel_shuffle(ans, self.K)
         #ans = torch.cat([ans[ : ,  dim_2//4:, :, :],ans[ : , :  dim_2//4, :, :]],dim=1)
         # except channe shuffle, channel shift also works
@@ -288,7 +288,7 @@ class Network(nn.Module):
         logits = self.classifier(out.view(out.size(0),-1))
         return logits
         
-    def get_weights2(self):
+    def get_weights2(self):                                    
         n = 3
         start = 2
         weights2_normal = F.softmax(self.betas_normal[0:2], dim=-1)
@@ -324,7 +324,7 @@ class Network(nn.Module):
 
     def _initialize_alphas(self):
         k = sum(1 for i in range(self._steps) for n in range(2+i)) 
-        num_ops = self.switch_on                                      #？？？
+        num_ops = self.switch_on                                      
         self.alphas_normal = nn.Parameter(torch.zeros(k, num_ops))
         self.alphas_reduce = nn.Parameter(torch.zeros(k, num_ops))
         self.betas_normal = nn.Parameter(torch.FloatTensor(1e-3*torch.randn(k)))

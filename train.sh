@@ -1,4 +1,3 @@
-python train_cifar.py --note '511first_s3' --arch 'first_s3' 2>&1 | tee 511first_s3.txt                                      
-python train_cifar.py --note '511second_s3' --arch 'second_s3' 2>&1 | tee 511second_s3.txt                                                      
-# python train.py_cifar --note '511second_s2' --arch '511second_s2' 2>&1 | tee 511second_s2.txt                                 
-# python train.py_cifar --note '511second_s1' --arch '511second_s1' 2>&1 | tee 511second_s1.txt                    
+#python train_cifar.py --save '511first_s3' --arch 'second_s3' 2>&1 | tee 511second_s3.txt
+#python train.py --save '511second_s3' --arch 'second_s3' 2>&1 | tee 511second_s3.txt        
+python train_cifar.py --arch 'second_s3'
